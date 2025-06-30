@@ -67,4 +67,4 @@ python3 cabe.py TSLA 062025 062725
 - Use **MMDDYY** date format (e.g., `062525` for June 25, 2025)
 - Stock symbols must be uppercase (e.g., SPY, AAPL, TSLA)
 - Free Polygon.io tier has rate limits (5 calls/minute)
-- Intraday data only available for recent trading days 
+- Intraday data only available for recent trading days
