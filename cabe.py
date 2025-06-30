@@ -587,6 +587,7 @@ def analyze_date_range(symbol: str, start_date: str, end_date: str,
         return analysis_results
 
 def main():
+    # CABE main function - handles command line arguments and orchestrates analysis
     parser = argparse.ArgumentParser(description='CABE (Cool Ass Backtest Engine) - Professional Stock Analysis Tool')
     parser.add_argument('symbol', help='Stock symbol (e.g., SPY)')
     parser.add_argument('start_date', help='Start date in MMDDYY format (e.g., 061325)')
