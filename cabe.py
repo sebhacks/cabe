@@ -240,7 +240,23 @@ def create_visualizations(df: pd.DataFrame, symbol: str, date: str, vwap: float)
         logger.error(f"Error creating visualization: {e}")
 
 def main():
-    """CABE main function with enhanced error handling and security"""
+    """
+    CABE main function with enhanced error handling and security
+    
+    Trading Strategy Implementation:
+    
+    VWAP Strategy:
+    - Buy when price crosses above VWAP, sell when crosses below VWAP or at close
+    - Short when price crosses below VWAP, cover when crosses above VWAP or at close
+    
+    Bollinger Bands Strategy:
+    - Buy when price crosses above middle band into upper band, sell when crosses below middle
+    - Short when price crosses below middle band, cover when crosses above middle
+    
+    RSI Strategy:
+    - Buy when RSI enters oversold region (<20), sell at close of next day or when RSI reaches overbought (>80)
+    - Short when RSI enters overbought region (>80), cover at close of next day or when RSI reaches oversold (<20)
+    """
     parser = argparse.ArgumentParser(description='CABE - Professional Stock Analysis Tool')
     parser.add_argument('symbol', help='Stock symbol (e.g., SPY) or futures contract (e.g., GCJ5)')
     parser.add_argument('start_date', help='Start date in MMDDYY format')
@@ -369,7 +385,7 @@ def main():
                 # Event detection using daily data with previous day comparison
                 events = {}
                 
-                # VWAP cross detection
+                # VWAP cross detection - Buy when crosses above, Short when crosses below
                 prev_above_vwap = prev_row['close'] > vwap
                 curr_above_vwap = row['close'] > vwap
                 if prev_above_vwap != curr_above_vwap:
@@ -413,14 +429,18 @@ def main():
                     events['rsi_overbought'] = []
                     events['rsi_oversold'] = []
                 
-                # Bollinger Band cross detection (only if bands are valid)
-                if not pd.isna(row['bb_upper']) and not pd.isna(row['bb_lower']):
+                # Bollinger Band cross detection - Buy when crosses above middle into upper, Short when crosses below middle
+                if not pd.isna(row['bb_upper']) and not pd.isna(row['bb_lower']) and not pd.isna(row['bb_middle']):
                     bb_events = []
                     
-                    # Cross above upper band
+                    # Cross above middle band into upper band (Buy signal)
+                    prev_above_middle = prev_row['close'] > prev_row['bb_middle']
+                    curr_above_middle = row['close'] > row['bb_middle']
                     prev_above_upper = prev_row['close'] > prev_row['bb_upper']
                     curr_above_upper = row['close'] > row['bb_upper']
-                    if not prev_above_upper and curr_above_upper:
+                    
+                    # Buy when crosses above middle AND is in upper band
+                    if not prev_above_middle and curr_above_middle and curr_above_upper:
                         bb_events.append({
                             'timestamp': day_timestamp,
                             'value': float(row['close']),
@@ -429,10 +449,12 @@ def main():
                             'volume_confirmed': True
                         })
                     
-                    # Cross below lower band
-                    prev_below_lower = prev_row['close'] < prev_row['bb_lower']
-                    curr_below_lower = row['close'] < row['bb_lower']
-                    if not prev_below_lower and curr_below_lower:
+                    # Cross below middle band (Short signal)
+                    prev_below_middle = prev_row['close'] < prev_row['bb_middle']
+                    curr_below_middle = row['close'] < row['bb_middle']
+                    
+                    # Short when crosses below middle
+                    if not prev_below_middle and curr_below_middle:
                         bb_events.append({
                             'timestamp': day_timestamp,
                             'value': float(row['close']),
@@ -447,7 +469,7 @@ def main():
 
                 for event_type, event_list in events.items():
                     if event_list:  # Only process if events were detected
-                        annotated_events = annotate_event_window_return(event_list, idx, date_list, date_to_close, args.window)
+                        annotated_events = annotate_event_window_return(event_list, idx, date_list, date_to_close, args.window, df, event_type)
                         for e in annotated_events:
                             e.update({'type': event_type, 'event_day': row['date'], 'symbol': args.symbol})
                             all_events.append(e)
@@ -491,10 +513,29 @@ def main():
                     filtered = events_df[(events_df['type'] == event_type) & (events_df['direction'] == direction)]
                 else:
                     filtered = events_df[events_df['type'] == event_type]
-                stats = aggregate_event_stats(filtered.to_dict('records'), args.window)
+                
+                # Use trade_return for sophisticated trading strategy results
+                if not filtered.empty and 'trade_return' in filtered.columns:
+                    valid_returns = filtered['trade_return'].dropna()
+                    if len(valid_returns) > 0:
+                        win_rate = (valid_returns > 0).mean()
+                        avg_return = valid_returns.mean()
+                        median_return = valid_returns.median()
+                        count = len(valid_returns)
+                    else:
+                        win_rate = avg_return = median_return = 0
+                        count = 0
+                else:
+                    # Fallback to window return for backward compatibility
+                    stats = aggregate_event_stats(filtered.to_dict('records'), args.window)
+                    win_rate = stats['win_rate'] or 0
+                    avg_return = stats['avg_return'] or 0
+                    median_return = stats['median_return'] or 0
+                    count = stats['count']
+                
                 label = label or direction or event_type.upper()
-                if stats['count'] > 0:
-                    print(f"  {label:<25} | Count: {stats['count']:<3} | Win Rate: {stats['win_rate']:.1%} | Avg Return: {stats['avg_return']:.3%} | Median: {stats['median_return']:.3%}")
+                if count > 0:
+                    print(f"  {label:<25} | Count: {count:<3} | Win Rate: {win_rate:.1%} | Avg Return: {avg_return:.3%} | Median: {median_return:.3%}")
                 else:
                     print(f"  {label:<25} | Count: 0")
 
@@ -508,19 +549,19 @@ def main():
             print("-" * 80)
             
             # VWAP breakdown
-            print("\n💹 VWAP CROSSES:")
-            print_event_stats('vwap', 'above', 'Crossed Above VWAP')
-            print_event_stats('vwap', 'below', 'Crossed Below VWAP')
+            print("\n💹 VWAP STRATEGY:")
+            print_event_stats('vwap', 'above', 'Buy Signal (Cross Above)')
+            print_event_stats('vwap', 'below', 'Short Signal (Cross Below)')
             
             # RSI breakdown
-            print("\n📉 RSI SIGNALS:")
-            print_event_stats('rsi_overbought', label='RSI Overbought (>80)')
-            print_event_stats('rsi_oversold', label='RSI Oversold (<20)')
+            print("\n📉 RSI STRATEGY:")
+            print_event_stats('rsi_oversold', label='Buy Signal (Oversold)')
+            print_event_stats('rsi_overbought', label='Short Signal (Overbought)')
             
             # Bollinger breakdown
-            print("\n📊 BOLLINGER BAND BREAKOUTS:")
-            print_event_stats('bollinger', 'above_upper', 'Broke Above Upper Band')
-            print_event_stats('bollinger', 'below_lower', 'Broke Below Lower Band')
+            print("\n📊 BOLLINGER BANDS STRATEGY:")
+            print_event_stats('bollinger', 'above_upper', 'Buy Signal (Cross Above Middle)')
+            print_event_stats('bollinger', 'below_lower', 'Short Signal (Cross Below Middle)')
 
             # --- Trade Simulation ---
             trades_df, trade_summary = simulate_trades(events_df.to_dict('records'), args.window, args.capital)
