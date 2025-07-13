@@ -64,7 +64,7 @@ MAX_SYMBOL_LENGTH = 10
 MAX_DATE_RANGE_DAYS = 365  # Limit to 1 year to prevent excessive API usage
 MIN_DATA_POINTS = 20
 MAX_RETRIES = 3
-RATE_LIMIT_WAIT = 65  # seconds
+RATE_LIMIT_WAIT = 5  # seconds
 
 def validate_symbol(symbol: str) -> bool:
     """Enhanced symbol validation for security"""
