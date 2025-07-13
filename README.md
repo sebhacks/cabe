@@ -57,6 +57,10 @@ python3 cabe.py SPY 062525 062727 --capital 50000
 
 # Combine multiple options
 python3 cabe.py AAPL 062525 062725 --window 5 --no-viz --capital 250000
+
+# Futures symbols (requires Polygon futures data access)
+python3 cabe.py /MES 062525 062727
+python3 cabe.py /MNQ 062525 062727
 ```
 
 ## 📈 Analysis Features
@@ -64,13 +68,13 @@ python3 cabe.py AAPL 062525 062725 --window 5 --no-viz --capital 250000
 CABE provides comprehensive technical analysis including:
 
 ### Technical Indicators
-- **VWAP (Volume Weighted Average Price)** - Calculated using intraday data
+- **VWAP (Volume Weighted Average Price)** - Calculated using daily OHLCV data
 - **RSI (Relative Strength Index)** - 14-period RSI with overbought/oversold levels (80/20)
 - **Bollinger Bands** - 20-period bands with 2 standard deviations
 - **Volume Analysis** - Volume confirmation for signal validation
 
 ### Event Detection
-- **VWAP Crosses** - Price crossing above/below VWAP
+- **VWAP Crosses** - Price crossing above/below VWAP with directional tracking
 - **RSI Crosses** - RSI crossing overbought (80) or oversold (20) levels
 - **Bollinger Band Crosses** - Price breaking above upper or below lower bands with volume confirmation
 
@@ -78,13 +82,14 @@ CABE provides comprehensive technical analysis including:
 - Simulates buying on each detected event
 - Calculates returns after specified window period
 - Tracks cumulative P&L and trade statistics
+- Provides directional breakdown of performance
 
 ## 📁 Output Files
 
 CABE generates several output files in the `cabe_output/` directory:
 
 ### Data Files
-- `{SYMBOL}_{START_DATE}_{END_DATE}_events.csv` - All detected events with return calculations
+- `{SYMBOL}_{START_DATE}_{END_DATE}_events.csv` - All detected events with return calculations and directional information
 - `{SYMBOL}_{START_DATE}_{END_DATE}_trades.csv` - Individual trade simulation results
 
 ### Visualization Files (unless `--no-viz` is used)
@@ -99,13 +104,14 @@ CABE generates several output files in the `cabe_output/` directory:
 
 ## 📊 Output Summary
 
-CABE provides a comprehensive summary including:
+CABE provides a comprehensive summary with directional breakdown including:
 
-### Event Statistics
-- Count of each event type detected
-- Win rate percentage
-- Average and median returns
-- Event type breakdown (VWAP, RSI, Bollinger)
+### Event Statistics (Directional)
+- **VWAP Crosses**: Above VWAP vs Below VWAP performance
+- **RSI Signals**: Overbought (>80) vs Oversold (<20) performance  
+- **Bollinger Band Breakouts**: Above Upper Band vs Below Lower Band performance
+- Win rate percentage for each direction
+- Average and median returns by direction
 
 ### Trade Simulation Results
 - Total number of trades executed
@@ -115,11 +121,37 @@ CABE provides a comprehensive summary including:
 
 ### Example Output
 ```
-VWAP             - count: 15    win_rate: 60.00% avg_return: 0.0234% median_return: 0.0187%
-RSI_OVERBOUGHT   - count: 8     win_rate: 37.50% avg_return: -0.0156% median_return: -0.0123%
-RSI_OVERSOLD     - count: 12    win_rate: 75.00% avg_return: 0.0345% median_return: 0.0298%
-BOLLINGER        - count: 6     win_rate: 66.67% avg_return: 0.0289% median_return: 0.0256%
-TRADE_SIM: num_trades=41, pnl=1234.56, final_capital=101234.56
+================================================================================
+📊 ANALYSIS RESULTS FOR SPY
+📅 Date Range: 2025-06-25 to 2025-06-27
+📈 Trading Days: 3
+================================================================================
+
+🎯 EVENT DETECTION SUMMARY
+--------------------------------------------------------------------------------
+
+💹 VWAP CROSSES:
+  Crossed Above VWAP        | Count: 8  | Win Rate: 75.0% | Avg Return: 0.045% | Median: 0.038%
+  Crossed Below VWAP        | Count: 3  | Win Rate: 33.3% | Avg Return: -0.012% | Median: -0.008%
+
+📉 RSI SIGNALS:
+  RSI Overbought (>80)      | Count: 2  | Win Rate: 50.0% | Avg Return: -0.008% | Median: -0.006%
+  RSI Oversold (<20)        | Count: 5  | Win Rate: 80.0% | Avg Return: 0.052% | Median: 0.045%
+
+📊 BOLLINGER BAND BREAKOUTS:
+  Broke Above Upper Band    | Count: 1  | Win Rate: 100.0% | Avg Return: 0.078% | Median: 0.078%
+  Broke Below Lower Band    | Count: 0  | Count: 0
+
+================================================================================
+💰 TRADE SIMULATION RESULTS
+================================================================================
+  📈 Total Trades: 19
+  💵 Initial Capital: $100,000.00
+  📊 Total P&L: $1,234.56
+  🎯 Final Capital: $101,234.56
+  📈 Avg Trade Return: 0.065%
+  📊 Median Trade Return: 0.052%
+================================================================================
 ```
 
 ## ⚠️ Important Notes
@@ -131,23 +163,27 @@ TRADE_SIM: num_trades=41, pnl=1234.56, final_capital=101234.56
 
 ### Stock Symbols
 - Must be uppercase (e.g., SPY, AAPL, TSLA)
-- Limited to 1-5 characters
+- Limited to 1-5 characters for stocks
+- Futures symbols supported (e.g., /MES, /MNQ) - requires Polygon futures data access
 - Must be valid symbols available on Polygon.io
 
 ### API Limitations
 - Free Polygon.io tier has rate limits (5 calls/minute)
-- CABE includes automatic retry logic for rate limit handling
-- Intraday data only available for recent trading days
+- CABE includes automatic retry logic with 5-second delays for rate limit handling
+- Uses efficient single daily data calls to minimize API usage
+- Futures data requires appropriate Polygon.io subscription level
 
 ### Performance Considerations
 - Use `--no-viz` flag for faster execution when visualizations aren't needed
 - Larger date ranges require more API calls and processing time
 - Window size affects return calculations and simulation results
+- Optimized for minimal API calls with daily data aggregation
 
 ### Data Requirements
 - Minimum 20 data points required for Bollinger Bands calculation
 - Sufficient volume data needed for signal confirmation
 - Events only detected when enough historical data is available
+- Cross detection uses previous day comparison for accurate signals
 
 ## 🧪 Advanced Usage Examples
 
@@ -165,6 +201,10 @@ python3 cabe.py TSLA 062525 062725 --window 1 --capital 50000
 python3 cabe.py SPY 062525 062727
 python3 cabe.py QQQ 062525 062727
 python3 cabe.py IWM 062525 062727
+
+# Futures analysis (requires appropriate Polygon subscription)
+python3 cabe.py /MES 062525 062727 --window 3
+python3 cabe.py /MNQ 062525 062727 --no-viz
 ```
 
 ## 📁 Project Structure
@@ -181,3 +221,12 @@ cabe/
     ├── *_trades.csv # Trade simulation results
     └── *_chart.png  # Visualization charts
 ```
+
+## 🔧 Recent Updates
+
+- **Directional Analysis**: Added detailed breakdown of VWAP and Bollinger Band crosses by direction
+- **Futures Support**: Added support for futures symbols (e.g., /MES, /MNQ)
+- **API Optimization**: Reduced API calls by using single daily data aggregation
+- **Enhanced Error Handling**: Improved input validation and rate limit handling
+- **Memory Optimization**: Efficient data processing for large date ranges
+- **Security Improvements**: Better API key handling and error logging
