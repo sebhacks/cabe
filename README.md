@@ -1,6 +1,6 @@
 # 🚀 CABE (Cool Ass Backtest Engine)
 
-**CABE** is a stock analysis tool that provides backtesting capabilities for Daily VWAP, Bollinger Band, and RSI crossovers during a given time period on daily timeframe. The tool uses historical data fetched from Polygon.io, for which you will need to set up a (free or paid) account and get your own API token.
+**CABE** is a stock analysis tool that provides backtesting capabilities for Daily VWAP, Bollinger Band, and RSI crossovers during a given time period. The tool uses historical data fetched from Polygon.io, for which you will need to set up a (free or paid) account and get your own API token.
 
 ## 🛠️ Installation
 
