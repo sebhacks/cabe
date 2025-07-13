@@ -39,6 +39,7 @@ python3 cabe.py SPY 062525 062727
 - `--window <days>` - Event window size in days for return calculations (default: 1)
 - `--no-viz` - Disable visualization generation (saves time and disk space)
 - `--capital <amount>` - Initial capital for trade simulation (default: 100000)
+- `--futures` - Enable futures symbol support (required for /MES, /MNQ, etc.)
 
 ### Examples
 
@@ -59,8 +60,8 @@ python3 cabe.py SPY 062525 062727 --capital 50000
 python3 cabe.py AAPL 062525 062725 --window 5 --no-viz --capital 250000
 
 # Futures symbols (requires Polygon futures data access)
-python3 cabe.py /MES 062525 062727
-python3 cabe.py /MNQ 062525 062727
+python3 cabe.py /MES 062525 062727 --futures
+python3 cabe.py /MNQ 062525 062727 --futures
 ```
 
 ## 📈 Analysis Features
@@ -203,8 +204,8 @@ python3 cabe.py QQQ 062525 062727
 python3 cabe.py IWM 062525 062727
 
 # Futures analysis (requires appropriate Polygon subscription)
-python3 cabe.py /MES 062525 062727 --window 3
-python3 cabe.py /MNQ 062525 062727 --no-viz
+python3 cabe.py /MES 062525 062727 --futures --window 3
+python3 cabe.py /MNQ 062525 062727 --futures --no-viz
 ```
 
 ## 📁 Project Structure
