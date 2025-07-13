@@ -60,18 +60,27 @@ plt.style.use('seaborn-v0_8')
 sns.set_palette("husl")
 
 # Security constants
-MAX_SYMBOL_LENGTH = 10
+MAX_SYMBOL_LENGTH = 7
 MAX_DATE_RANGE_DAYS = 365  # Limit to 1 year to prevent excessive API usage
 MIN_DATA_POINTS = 20
 MAX_RETRIES = 3
 RATE_LIMIT_WAIT = 5  # seconds
 
-def validate_symbol(symbol: str) -> bool:
-    """Enhanced symbol validation for security"""
+def validate_symbol(symbol: str, is_futures: bool = False) -> bool:
+    """Enhanced symbol validation for security - supports stocks and futures"""
     if not symbol or len(symbol) > MAX_SYMBOL_LENGTH:
         return False
-    # More restrictive pattern to prevent injection attacks
-    return bool(re.match(r'^[A-Z]{1,5}$', symbol.upper()))
+    
+    if is_futures:
+        # For futures, allow 4-5 uppercase letters ending in digit (e.g., GCJ5, MESU25)
+        return bool(re.match(r'^[A-Z]{2,3}[A-Z]\d{1,2}$', symbol))
+    else:
+        # For stocks, allow 1-5 uppercase letters
+        return bool(re.match(r'^[A-Z]{1,5}$', symbol.upper()))
+
+def is_futures_symbol(symbol: str) -> bool:
+    """Detect if symbol is a futures contract"""
+    return bool(re.match(r'^[A-Z]{4,5}\d$', symbol))
 
 def validate_date_range(start_date: str, end_date: str) -> bool:
     """Validate date range to prevent excessive API usage"""
@@ -233,16 +242,20 @@ def create_visualizations(df: pd.DataFrame, symbol: str, date: str, vwap: float)
 def main():
     """CABE main function with enhanced error handling and security"""
     parser = argparse.ArgumentParser(description='CABE - Professional Stock Analysis Tool')
-    parser.add_argument('symbol', help='Stock symbol (e.g., SPY)')
+    parser.add_argument('symbol', help='Stock symbol (e.g., SPY) or futures contract (e.g., GCJ5)')
     parser.add_argument('start_date', help='Start date in MMDDYY format')
     parser.add_argument('end_date', help='End date in MMDDYY format')
     parser.add_argument('--window', type=int, default=1, help='Event window size in days (default: 1)')
     parser.add_argument('--no-viz', action='store_true', help='Disable visualizations')
     parser.add_argument('--capital', type=float, default=100000, help='Initial capital for simulation')
+    parser.add_argument('--futures', action='store_true', help='Force futures mode (auto-detected by default)')
     args = parser.parse_args()
 
-    # Enhanced input validation
-    if not validate_symbol(args.symbol):
+    # Determine if this is a futures contract
+    is_futures = args.futures or is_futures_symbol(args.symbol)
+    
+    # Enhanced input validation with futures awareness
+    if not validate_symbol(args.symbol, is_futures):
         logger.error(f"Invalid symbol: {args.symbol}")
         return
 
@@ -265,88 +278,199 @@ def main():
     if not validate_date_range(start_date, end_date):
         return
 
-    logger.info(f"Starting analysis for {args.symbol} from {start_date} to {end_date}")
+    # Determine if this is a futures contract
+    is_futures = args.futures or is_futures_symbol(args.symbol)
+    asset_type = "futures" if is_futures else "stocks"
+    
+    logger.info(f"Starting {asset_type} analysis for {args.symbol} from {start_date} to {end_date}")
 
     try:
-        # Fetch daily data
-        daily_aggs = fetch_with_rate_limit_handling(
-            client.list_aggs,
-            ticker=args.symbol, multiplier=1, timespan="day",
-            from_=start_date, to=end_date, limit=50000
-        )
+        # Single API call to get all daily data
+        logger.info(f"Fetching daily {asset_type} data with single API call...")
+        
+        if is_futures:
+            # Use futures endpoint (list_futures_aggregates)
+            daily_aggs = fetch_with_rate_limit_handling(
+                client.list_futures_aggregates,
+                ticker=args.symbol, resolution="day",
+                window_start_gte=start_date, window_start_lte=end_date, limit=50000
+            )
+        else:
+            # Use stocks endpoint
+            daily_aggs = fetch_with_rate_limit_handling(
+                client.list_aggs,
+                ticker=args.symbol, multiplier=1, timespan="day",
+                from_=start_date, to=end_date, limit=50000
+            )
+            
         daily_data = process_aggregation_data(daily_aggs)
         if not daily_data:
             logger.error(f"No daily data for {args.symbol}")
             return
 
-        # Process daily data more efficiently
-        date_to_close = {}
-        date_list = []
-        for ts, close in zip(daily_data['timestamps'], daily_data['closes']):
-            date = datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d')
-            date_to_close[date] = close
-            date_list.append(date)
+        # Create DataFrame from daily data
+        df = pd.DataFrame({
+            'date': [datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d') for ts in daily_data['timestamps']],
+            'open': daily_data['opens'],
+            'high': daily_data['highs'],
+            'low': daily_data['lows'],
+            'close': daily_data['closes'],
+            'volume': daily_data['volumes']
+        })
         
-        trading_days = [{'date': date, 'index': i} for i, date in enumerate(date_list) if start_date <= date <= end_date]
+        # Filter to requested date range
+        df = df[(df['date'] >= start_date) & (df['date'] <= end_date)].reset_index(drop=True)
+        
+        if len(df) < MIN_DATA_POINTS:
+            logger.error(f"Insufficient data points ({len(df)}). Need at least {MIN_DATA_POINTS} for analysis.")
+            return
+
+        logger.info(f"Processing {len(df)} trading days")
+
+        # Calculate technical indicators using daily data
+        closes = df['close'].tolist()
+        volumes = df['volume'].tolist()
+        dates = df['date'].tolist()
+
+        # Calculate VWAP for the entire period
+        vwap = np.average(closes, weights=volumes)
+        
+        # Calculate RSI using daily closes
+        closes_s = pd.Series(closes)
+        rsi_values = 100 - (100 / (1 + (closes_s.diff().where(closes_s.diff() > 0, 0).ewm(span=14).mean() / -closes_s.diff().where(closes_s.diff() < 0, 0).ewm(span=14).mean())))
+        
+        # Calculate Bollinger Bands
+        bb_middle, bb_upper, bb_lower = calculate_bollinger_bands(closes)
+
+        # Add indicators to DataFrame
+        df['rsi'] = rsi_values
+        df['bb_middle'] = bb_middle
+        df['bb_upper'] = bb_upper
+        df['bb_lower'] = bb_lower
+        df['vwap'] = vwap
+
+        # Create date_to_close mapping for return calculations
+        date_to_close = dict(zip(df['date'], df['close']))
+        date_list = df['date'].tolist()
+
         all_events = []
 
-        logger.info(f"Processing {len(trading_days)} trading days")
-
-        for day in trading_days:
+        # Process each day for event detection
+        for idx, row in df.iterrows():
             try:
-                aggs = fetch_with_rate_limit_handling(
-                    client.list_aggs,
-                    ticker=args.symbol, multiplier=5, timespan="minute",
-                    from_=day['date'], to=day['date'], limit=50000
-                )
-                if not aggs: 
-                    logger.warning(f"No intraday data for {day['date']}")
+                # Skip first day as we need previous day for comparison
+                if idx == 0:
                     continue
+                    
+                # Get previous day's data for comparison
+                prev_row = df.iloc[idx - 1]
+                day_timestamp = f"{row['date']} 09:30:00"
                 
-                data = process_aggregation_data(aggs)
-                if not data or len(data['closes']) < MIN_DATA_POINTS: 
-                    logger.warning(f"Insufficient data for {day['date']} (need {MIN_DATA_POINTS}, got {len(data['closes']) if data else 0})")
-                    continue
-
-                # --- Calculations with error handling ---
-                try:
-                    vwap = np.average((np.array(data['highs']) + np.array(data['lows']) + np.array(data['closes'])) / 3, weights=np.array(data['volumes']))
+                # Event detection using daily data with previous day comparison
+                events = {}
+                
+                # VWAP cross detection
+                prev_above_vwap = prev_row['close'] > vwap
+                curr_above_vwap = row['close'] > vwap
+                if prev_above_vwap != curr_above_vwap:
+                    events['vwap'] = [{
+                        'timestamp': day_timestamp,
+                        'value': float(row['close']),
+                        'direction': 'above' if curr_above_vwap else 'below',
+                        'threshold': vwap
+                    }]
+                else:
+                    events['vwap'] = []
+                
+                # RSI cross detection (only if RSI is valid)
+                if not pd.isna(row['rsi']) and not pd.isna(prev_row['rsi']):
+                    # Overbought cross
+                    prev_overbought = prev_row['rsi'] > 80
+                    curr_overbought = row['rsi'] > 80
+                    if prev_overbought != curr_overbought:
+                        events['rsi_overbought'] = [{
+                            'timestamp': day_timestamp,
+                            'value': float(row['rsi']),
+                            'direction': 'above' if curr_overbought else 'below',
+                            'threshold': 80
+                        }]
+                    else:
+                        events['rsi_overbought'] = []
                     
-                    closes_s = pd.Series(data['closes'])
-                    rsi_values = 100 - (100 / (1 + (closes_s.diff().where(closes_s.diff() > 0, 0).ewm(span=14).mean() / -closes_s.diff().where(closes_s.diff() < 0, 0).ewm(span=14).mean())))
+                    # Oversold cross
+                    prev_oversold = prev_row['rsi'] < 20
+                    curr_oversold = row['rsi'] < 20
+                    if prev_oversold != curr_oversold:
+                        events['rsi_oversold'] = [{
+                            'timestamp': day_timestamp,
+                            'value': float(row['rsi']),
+                            'direction': 'above' if curr_oversold else 'below',
+                            'threshold': 20
+                        }]
+                    else:
+                        events['rsi_oversold'] = []
+                else:
+                    events['rsi_overbought'] = []
+                    events['rsi_oversold'] = []
+                
+                # Bollinger Band cross detection (only if bands are valid)
+                if not pd.isna(row['bb_upper']) and not pd.isna(row['bb_lower']):
+                    bb_events = []
                     
-                    bb_middle, bb_upper, bb_lower = calculate_bollinger_bands(data['closes'])
+                    # Cross above upper band
+                    prev_above_upper = prev_row['close'] > prev_row['bb_upper']
+                    curr_above_upper = row['close'] > row['bb_upper']
+                    if not prev_above_upper and curr_above_upper:
+                        bb_events.append({
+                            'timestamp': day_timestamp,
+                            'value': float(row['close']),
+                            'direction': 'above_upper',
+                            'threshold': float(row['bb_upper']),
+                            'volume_confirmed': True
+                        })
+                    
+                    # Cross below lower band
+                    prev_below_lower = prev_row['close'] < prev_row['bb_lower']
+                    curr_below_lower = row['close'] < row['bb_lower']
+                    if not prev_below_lower and curr_below_lower:
+                        bb_events.append({
+                            'timestamp': day_timestamp,
+                            'value': float(row['close']),
+                            'direction': 'below_lower',
+                            'threshold': float(row['bb_lower']),
+                            'volume_confirmed': True
+                        })
+                    
+                    events['bollinger'] = bb_events
+                else:
+                    events['bollinger'] = []
 
-                    df = pd.DataFrame({
-                        'timestamp': data['timestamps'], 'open': data['opens'], 'high': data['highs'], 
-                        'low': data['lows'], 'close': data['closes'], 'volume': data['volumes'],
-                        'rsi': rsi_values, 'bb_middle': bb_middle, 'bb_upper': bb_upper, 'bb_lower': bb_lower
-                    })
-                    df['datetime'] = pd.to_datetime(df['timestamp'])
-
-                    # --- Event Detection ---
-                    events = {
-                        'vwap': detect_vwap_crosses(data['closes'], vwap, data['timestamps']),
-                        'rsi_overbought': detect_rsi_crosses(rsi_values, 80, data['timestamps']),
-                        'rsi_oversold': detect_rsi_crosses(rsi_values, 20, data['timestamps']),
-                        'bollinger': detect_bollinger_crosses(data['closes'], bb_upper, bb_lower, data['timestamps'], data['volumes'])
-                    }
-
-                    for event_type, event_list in events.items():
-                        annotated_events = annotate_event_window_return(event_list, day['index'], date_list, date_to_close, args.window)
+                for event_type, event_list in events.items():
+                    if event_list:  # Only process if events were detected
+                        annotated_events = annotate_event_window_return(event_list, idx, date_list, date_to_close, args.window)
                         for e in annotated_events:
-                            e.update({'type': event_type, 'event_day': day['date'], 'symbol': args.symbol})
+                            e.update({'type': event_type, 'event_day': row['date'], 'symbol': args.symbol})
                             all_events.append(e)
 
-                    if not args.no_viz:
-                        create_visualizations(df, args.symbol, day['date'], vwap)
-
-                except Exception as e:
-                    logger.error(f"Error processing day {day['date']}: {e}")
-                    continue
+                # Create visualization for each day if requested
+                if not args.no_viz:
+                    # Create a single-day DataFrame for visualization
+                    day_df = pd.DataFrame({
+                        'datetime': [pd.to_datetime(day_timestamp)],
+                        'open': [row['open']],
+                        'high': [row['high']],
+                        'low': [row['low']],
+                        'close': [row['close']],
+                        'volume': [row['volume']],
+                        'rsi': [row['rsi']],
+                        'bb_middle': [row['bb_middle']],
+                        'bb_upper': [row['bb_upper']],
+                        'bb_lower': [row['bb_lower']]
+                    })
+                    create_visualizations(day_df, args.symbol, row['date'], vwap)
 
             except Exception as e:
-                logger.error(f"Error fetching data for {day['date']}: {e}")
+                logger.error(f"Error processing day {row['date']}: {e}")
                 continue
 
         if not all_events:
@@ -361,19 +485,61 @@ def main():
             events_df.to_csv(events_filename, index=False)
             logger.info(f"Events saved: {events_filename}")
 
-            for event_type in ['vwap', 'rsi_overbought', 'rsi_oversold', 'bollinger']:
-                stats = aggregate_event_stats(events_df[events_df['type'] == event_type].to_dict('records'), args.window)
-                if stats['count'] > 0:
-                    print(f"{event_type.upper():<16} - count: {stats['count']:<5} win_rate: {stats['win_rate']:.2%} avg_return: {stats['avg_return']:.4%} median_return: {stats['median_return']:.4%}")
+            # Directional breakdown for VWAP and Bollinger
+            def print_event_stats(event_type, direction=None, label=None):
+                if direction is not None:
+                    filtered = events_df[(events_df['type'] == event_type) & (events_df['direction'] == direction)]
                 else:
-                    print(f"{event_type.upper():<16} - count: 0")
+                    filtered = events_df[events_df['type'] == event_type]
+                stats = aggregate_event_stats(filtered.to_dict('records'), args.window)
+                label = label or direction or event_type.upper()
+                if stats['count'] > 0:
+                    print(f"  {label:<25} | Count: {stats['count']:<3} | Win Rate: {stats['win_rate']:.1%} | Avg Return: {stats['avg_return']:.3%} | Median: {stats['median_return']:.3%}")
+                else:
+                    print(f"  {label:<25} | Count: 0")
+
+            print("\n" + "="*80)
+            print(f"📊 ANALYSIS RESULTS FOR {args.symbol.upper()}")
+            print(f"📅 Date Range: {start_date} to {end_date}")
+            print(f"📈 Trading Days: {len(df)}")
+            print("="*80)
+
+            print("\n🎯 EVENT DETECTION SUMMARY")
+            print("-" * 80)
+            
+            # VWAP breakdown
+            print("\n💹 VWAP CROSSES:")
+            print_event_stats('vwap', 'above', 'Crossed Above VWAP')
+            print_event_stats('vwap', 'below', 'Crossed Below VWAP')
+            
+            # RSI breakdown
+            print("\n📉 RSI SIGNALS:")
+            print_event_stats('rsi_overbought', label='RSI Overbought (>80)')
+            print_event_stats('rsi_oversold', label='RSI Oversold (<20)')
+            
+            # Bollinger breakdown
+            print("\n📊 BOLLINGER BAND BREAKOUTS:")
+            print_event_stats('bollinger', 'above_upper', 'Broke Above Upper Band')
+            print_event_stats('bollinger', 'below_lower', 'Broke Below Lower Band')
 
             # --- Trade Simulation ---
             trades_df, trade_summary = simulate_trades(events_df.to_dict('records'), args.window, args.capital)
             trades_filename = f'cabe_output/{args.symbol}_{start_date}_{end_date}_trades.csv'
             trades_df.to_csv(trades_filename, index=False)
             logger.info(f"Trades saved: {trades_filename}")
-            print(f"TRADE_SIM: num_trades={trade_summary['num_trades']}, pnl={trade_summary['total_pnl']:.2f}, final_capital={trade_summary['final_capital']:.2f}")
+            
+            print("\n" + "="*80)
+            print("💰 TRADE SIMULATION RESULTS")
+            print("="*80)
+            print(f"  📈 Total Trades: {trade_summary['num_trades']}")
+            print(f"  💵 Initial Capital: ${args.capital:,.2f}")
+            print(f"  📊 Total P&L: ${trade_summary['total_pnl']:,.2f}")
+            print(f"  🎯 Final Capital: ${trade_summary['final_capital']:,.2f}")
+            if trade_summary['avg_trade_return'] is not None:
+                print(f"  📈 Avg Trade Return: {trade_summary['avg_trade_return']:.3%}")
+            if trade_summary['median_trade_return'] is not None:
+                print(f"  📊 Median Trade Return: {trade_summary['median_trade_return']:.3%}")
+            print("="*80)
 
         except Exception as e:
             logger.error(f"Error saving results: {e}")
